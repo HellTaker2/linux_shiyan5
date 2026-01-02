@@ -2,13 +2,8 @@
 module="sbull"
 device="sbull"
 
-# invoke rmmod with all arguments we got
+# 使用所有参数调用 rmmod
 rmmod $module $* || exit 1
 
-# Remove stale nodes
+# 删除旧节点
 rm -f /dev/${device}[a-d]* /dev/${device}
-
-
-
-
-

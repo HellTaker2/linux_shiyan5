@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# 创建分区节点的函数
 function make_minors {
     let part=1
     while (($part < $minors)); do
@@ -11,29 +12,32 @@ function make_minors {
 
 
 # FIXME: This isn't handling minors (partitions) at all.
+# (实际上，下面的代码确实处理了分区)
 module="sbull"
 device="sbull"
 mode="664"
 chardevice="sbullr"
 minors=16
 
-# Group: since distributions do it differently, look for wheel or use staff
+# 组设置：由于发行版不同，查找 wheel 或使用 staff
 if grep '^staff:' /etc/group > /dev/null; then
     group="staff"
 else
     group="wheel"
 fi
 
-# invoke insmod with all arguments we got
-# and use a pathname, as newer modutils don't look in . by default
+# 使用所有参数调用 insmod
+# 并使用路径名，因为较新的 modutils 默认不在当前目录查找
 insmod ./$module.ko $* || exit 1
 
+# 从 /proc/devices 获取主设备号
 major=`cat /proc/devices | awk "\\$2==\"$module\" {print \\$1}"`
 
-# Remove stale nodes and replace them, then give gid and perms
+# 删除旧节点并替换它们，然后赋予组和权限
 
 rm -f /dev/${device}[a-d]* /dev/${device}
 
+# 创建设备节点和分区节点
 mknod /dev/${device}a b $major 0
 make_minors /dev/${device}a 0
 mknod /dev/${device}b b $major 16
@@ -42,6 +46,10 @@ mknod /dev/${device}c b $major 32
 make_minors /dev/${device}c 32
 mknod /dev/${device}d b $major 48
 make_minors /dev/${device}d 48
+
+# 创建符号链接
 ln -sf ${device}a /dev/${device}
+
+# 设置组和权限
 chgrp $group /dev/${device}[a-d]*
 chmod $mode  /dev/${device}[a-d]*

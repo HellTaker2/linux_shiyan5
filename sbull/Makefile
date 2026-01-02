@@ -1,20 +1,20 @@
-# Comment/uncomment the following line to disable/enable debugging
+# 注释/取消注释以下行以禁用/启用调试
 #DEBUG = y
 
 
-# Add your debugging flag (or not) to CFLAGS
+# 将调试标志（或不添加）添加到 CFLAGS
 ifeq ($(DEBUG),y)
-  DEBFLAGS = -O -g -DSBULL_DEBUG # "-O" is needed to expand inlines
+  DEBFLAGS = -O -g -DSBULL_DEBUG # "-O" 需要用来展开内联函数
 else
   DEBFLAGS = -O2
 endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
-# for case RM_SIMPLE fall through
+# 用于处理 switch case 中 RM_SIMPLE 的 fall through 警告
 EXTRA_CFLAGS += -I.. -Wno-implicit-fallthrough
 
 ifneq ($(KERNELRELEASE),)
-# call from kernel build system
+# 从内核构建系统调用
 
 obj-m	:= sbull.o
 

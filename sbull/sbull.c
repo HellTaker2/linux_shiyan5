@@ -1,12 +1,15 @@
 /*
  * Sample disk driver, from the beginning.
+ * 一个简单的块设备驱动程序示例。
  */
 
 #include <linux/version.h> 	/* LINUX_VERSION_CODE  */
 #include <linux/blk-mq.h>	
-/* https://olegkutkov.me/2020/02/10/linux-block-device-driver/
+/* 
+   参考资料:
+   https://olegkutkov.me/2020/02/10/linux-block-device-driver/
    https://prog.world/linux-kernel-5-0-we-write-simple-block-device-under-blk-mq/           
-   blk-mq and kernels >= 5.0
+   blk-mq 机制适用于内核版本 >= 5.0
 */
 
 
@@ -32,64 +35,68 @@
 
 MODULE_LICENSE("Dual BSD/GPL");
 
+/* 模块参数 */
 static int sbull_major = 0;
 module_param(sbull_major, int, 0);
-static int hardsect_size = 512;
+
+static int hardsect_size = 512; /* 硬件扇区大小 */
 module_param(hardsect_size, int, 0);
-static int nsectors = 1024;	/* How big the drive is */
+
+static int nsectors = 1024;	/* 设备大小（扇区数） */
 module_param(nsectors, int, 0);
-static int ndevices = 4;
+
+static int ndevices = 4; /* 设备数量 */
 module_param(ndevices, int, 0);
 
 /*
- * The different "request modes" we can use.
+ * 我们支持的不同“请求处理模式”。
  */
 enum {
-	RM_SIMPLE  = 0,	/* The extra-simple request function */
-	RM_FULL    = 1,	/* The full-blown version */
-	RM_NOQUEUE = 2,	/* Use make_request */
+	RM_SIMPLE  = 0,	/* 简单的请求处理函数 */
+	RM_FULL    = 1,	/* 完整的请求处理函数 */
+	RM_NOQUEUE = 2,	/* 使用 make_request (不使用请求队列) */
 };
 static int request_mode = RM_SIMPLE;
 module_param(request_mode, int, 0);
 
 /*
- * Minor number and partition management.
+ * 次设备号和分区管理。
  */
 #define SBULL_MINORS	16
 #define MINOR_SHIFT	4
 #define DEVNUM(kdevnum)	(MINOR(kdev_t_to_nr(kdevnum)) >> MINOR_SHIFT
 
 /*
- * We can tweak our hardware sector size, but the kernel talks to us
- * in terms of small sectors, always.
+ * 我们可以调整硬件扇区大小，但内核总是以小扇区（512字节）与我们通信。
  */
 #define KERNEL_SECTOR_SIZE	512
 
 /*
- * After this much idle time, the driver will simulate a media change.
+ * 经过这段空闲时间后，驱动程序将模拟介质更改。
  */
 #define INVALIDATE_DELAY	30*HZ
 
 /*
- * The internal representation of our device.
+ * 我们设备的内部表示结构体。
  */
 struct sbull_dev {
-        int size;                       /* Device size in sectors */
-        u8 *data;                       /* The data array */
-        short users;                    /* How many users */
-        short media_change;             /* Flag a media change? */
-        spinlock_t lock;                /* For mutual exclusion */
-	struct blk_mq_tag_set tag_set;	/* tag_set added */
-        struct request_queue *queue;    /* The device request queue */
+        int size;                       /* 设备大小（字节或扇区数，取决于使用方式，这里主要是字节） */
+        u8 *data;                       /* 数据数组（虚拟磁盘的内容） */
+        short users;                    /* 当前有多少用户打开了该设备 */
+        short media_change;             /* 介质是否发生改变的标志？ */
+        spinlock_t lock;                /* 用于互斥访问的自旋锁 */
+	struct blk_mq_tag_set tag_set;	/* blk-mq 标签集 (tag_set added) */
+        struct request_queue *queue;    /* 设备请求队列 */
 
-		补全
-        struct timer_list timer;        /* For simulated media changes */
+        struct gendisk *gd;             /* 通用磁盘结构体 (补全) */
+        struct timer_list timer;        /* 用于模拟介质更改的定时器 */
 };
 
-static struct sbull_dev *Devices = NULL;
+static struct sbull_dev *Devices = NULL; /* 设备数组指针 */
 
 /**
-* See https://github.com/openzfs/zfs/pull/10187/
+* 参见 https://github.com/openzfs/zfs/pull/10187/
+* 这是一个兼容性辅助函数，用于分配请求队列。
 */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0))
 static inline struct request_queue *
@@ -113,16 +120,29 @@ blk_generic_alloc_queue(int node_id)
 }
 
 /*
- * Handle an I/O request.
+ * 处理实际的 I/O 请求（数据传输）。
  */
 static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
 		unsigned long nsect, char *buffer, int write)
 {
-补全
+	unsigned long offset = sector * KERNEL_SECTOR_SIZE;
+	unsigned long nbytes = nsect * KERNEL_SECTOR_SIZE;
+
+	/* 检查是否越界 */
+	if ((offset + nbytes) > dev->size) {
+		printk (KERN_NOTICE "sbull: Beyond-end write (%ld %ld)\n", offset, nbytes);
+		return;
+	}
+
+	/* 执行数据传输 (补全) */
+	if (write)
+		memcpy(dev->data + offset, buffer, nbytes);
+	else
+		memcpy(buffer, dev->data + offset, nbytes);
 }
 
 /*
- * The simple form of the request function.
+ * 简单版本的请求处理函数。
  */
 //static void sbull_request(struct request_queue *q)
 static blk_status_t sbull_request(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data* bd)   /* For blk-mq */
@@ -131,37 +151,41 @@ static blk_status_t sbull_request(struct blk_mq_hw_ctx *hctx, const struct blk_m
 	struct sbull_dev *dev = req->rq_disk->private_data;
         struct bio_vec bvec;
         struct req_iterator iter;
-        sector_t pos_sector = blk_rq_pos(req);
+        sector_t pos_sector = blk_rq_pos(req); /* 请求的起始扇区 */
 	void	*buffer;
 	blk_status_t  ret;
 
-	blk_mq_start_request (req);
+	blk_mq_start_request (req); /* 开始处理请求 */
 
 	if (blk_rq_is_passthrough(req)) {
 		printk (KERN_NOTICE "Skip non-fs request\n");
                 ret = BLK_STS_IOERR;  //-EIO
 			goto done;
 	}
+	
+	/* 遍历请求中的每个段 (segment) */
 	rq_for_each_segment(bvec, req, iter)
 	{
-		size_t num_sector = blk_rq_cur_sectors(req);
+		size_t num_sector = blk_rq_cur_sectors(req); /* 当前段的扇区数 */
 		printk (KERN_NOTICE "Req dev %u dir %d sec %lld, nr %ld\n",
                         (unsigned)(dev - Devices), rq_data_dir(req),
                         pos_sector, num_sector);
 		buffer = page_address(bvec.bv_page) + bvec.bv_offset;
+		
+		/* 调用传输函数 */
 		sbull_transfer(dev, pos_sector, num_sector,
 				buffer, rq_data_dir(req) == WRITE);
 		pos_sector += num_sector;
 	}
 	ret = BLK_STS_OK;
 done:
-	blk_mq_end_request (req, ret);
+	blk_mq_end_request (req, ret); /* 结束请求处理 */
 	return ret;
 }
 
 
 /*
- * Transfer a single BIO.
+ * 传输单个 BIO。
  */
 static int sbull_xfer_bio(struct sbull_dev *dev, struct bio *bio)
 {
@@ -169,23 +193,26 @@ static int sbull_xfer_bio(struct sbull_dev *dev, struct bio *bio)
 	struct bvec_iter iter;
 	sector_t sector = bio->bi_iter.bi_sector;
 
-	/* Do each segment independently. */
+	/* 独立处理每个段 (segment) */
 	bio_for_each_segment(bvec, bio, iter) {
 		//char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
-		char *buffer = kmap_atomic(bvec.bv_page) + bvec.bv_offset;
+		char *buffer = kmap_atomic(bvec.bv_page) + bvec.bv_offset; /* 映射内存 */
+		
 		//sbull_transfer(dev, sector, bio_cur_bytes(bio) >> 9,
 		sbull_transfer(dev, sector, (bio_cur_bytes(bio) / KERNEL_SECTOR_SIZE),
 				buffer, bio_data_dir(bio) == WRITE);
+		
 		//sector += bio_cur_bytes(bio) >> 9;
 		sector += (bio_cur_bytes(bio) / KERNEL_SECTOR_SIZE);
+		
 		//__bio_kunmap_atomic(buffer, KM_USER0);
-		kunmap_atomic(buffer);
+		kunmap_atomic(buffer); /* 解除映射 */
 	}
-	return 0; /* Always "succeed" */
+	return 0; /* 总是“成功” */
 }
 
 /*
- * Transfer a full request.
+ * 传输完整的请求 (遍历请求中的所有 bio)。
  */
 static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
 {
@@ -203,7 +230,9 @@ static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
 
 
 /*
- * Smarter request function that "handles clustering".
+ * 更智能的请求处理函数，处理“聚类”（Clustering）。
+ * 虽然这里看起来和 simple 版本逻辑差不多，但在老版本内核中可能涉及更多队列管理。
+ * 在 blk-mq 中，它也遍历 bio。
  */
 //static void sbull_full_request(struct request_queue *q)
 static blk_status_t sbull_full_request(struct blk_mq_hw_ctx * hctx, const struct blk_mq_queue_data * bd)
@@ -236,7 +265,8 @@ static blk_status_t sbull_full_request(struct blk_mq_hw_ctx * hctx, const struct
 
 
 /*
- * The direct make request version.
+ * 直接的 make_request 版本。
+ * 这种模式下，我们不使用请求队列，而是直接处理 bio。
  */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0))
 //static void sbull_make_request(struct request_queue *q, struct bio *bio)
@@ -257,14 +287,14 @@ static blk_qc_t sbull_make_request(struct bio *bio)
 
 
 /*
- * Open and close.
+ * 打开和关闭设备。
  */
 
 static int sbull_open(struct block_device *bdev, fmode_t mode)
 {
 	struct sbull_dev *dev = bdev->bd_disk->private_data;
 
-	del_timer_sync(&dev->timer);
+	del_timer_sync(&dev->timer); /* 删除定时器，防止在打开期间模拟介质移除 */
 	//filp->private_data = dev;
 	spin_lock(&dev->lock);
 	if (! dev->users) 
@@ -272,10 +302,9 @@ static int sbull_open(struct block_device *bdev, fmode_t mode)
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0))
 		check_disk_change(bdev);
 #else
-                /* For newer kernels (as of 5.10), bdev_check_media_change()
-                 * is used, in favor of check_disk_change(),
-                 * with the modification that invalidation
-                 * is no longer forced. */
+                /* 对于较新的内核（截至 5.10），使用 bdev_check_media_change()
+                 * 代替 check_disk_change()，
+                 * 修改在于不再强制失效。 */
 
                 if(bdev_check_media_change(bdev))
                 {
@@ -293,11 +322,21 @@ static int sbull_open(struct block_device *bdev, fmode_t mode)
 
 static void sbull_release(struct gendisk *disk, fmode_t mode)
 {
-补全
+	struct sbull_dev *dev = disk->private_data;
+
+	spin_lock(&dev->lock);
+	dev->users--;
+
+	if (!dev->users) {
+		/* 如果没有用户了，启动定时器，稍后模拟介质移除 */
+		dev->timer.expires = jiffies + INVALIDATE_DELAY;
+		add_timer(&dev->timer);
+	}
+	spin_unlock(&dev->lock);
 }
 
 /*
- * Look for a (simulated) media change.
+ * 检查（模拟的）介质更改。
  */
 int sbull_media_changed(struct gendisk *gd)
 {
@@ -307,8 +346,8 @@ int sbull_media_changed(struct gendisk *gd)
 }
 
 /*
- * Revalidate.  WE DO NOT TAKE THE LOCK HERE, for fear of deadlocking
- * with open.  That needs to be reevaluated.
+ * 重新验证。这里我们没有获取锁，担心与 open 死锁。
+ * 这需要重新评估。
  */
 int sbull_revalidate(struct gendisk *gd)
 {
@@ -322,8 +361,7 @@ int sbull_revalidate(struct gendisk *gd)
 }
 
 /*
- * The "invalidate" function runs out of the device timer; it sets
- * a flag to simulate the removal of the media.
+ * “失效”函数由设备定时器运行；它设置一个标志来模拟介质的移除。
  */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)) && !defined(timer_setup)
 void sbull_invalidate(unsigned long ldev)
@@ -344,7 +382,7 @@ void sbull_invalidate(struct timer_list * ldev)
 }
 
 /*
- * The ioctl() implementation
+ * ioctl() 实现
  */
 
 int sbull_ioctl (struct block_device *bdev, fmode_t mode,
@@ -357,10 +395,9 @@ int sbull_ioctl (struct block_device *bdev, fmode_t mode,
 	switch(cmd) {
 	    case HDIO_GETGEO:
         	/*
-		 * Get geometry: since we are a virtual device, we have to make
-		 * up something plausible.  So we claim 16 sectors, four heads,
-		 * and calculate the corresponding number of cylinders.  We set the
-		 * start of data at sector four.
+		 * 获取几何信息：因为我们是虚拟设备，所以必须编造一些合理的数据。
+		 * 所以我们声称有 16 个扇区，4 个磁头，并计算相应的柱面数。
+		 * 我们将数据起始位置设置为第 4 个扇区。
 		 */
 		size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
 		geo.cylinders = (size & ~0x3f) >> 6;
@@ -372,13 +409,13 @@ int sbull_ioctl (struct block_device *bdev, fmode_t mode,
 		return 0;
 	}
 
-	return -ENOTTY; /* unknown command */
+	return -ENOTTY; /* 未知命令 */
 }
 
 
 
 /*
- * The device operations structure.
+ * 设备操作结构体。
  */
 static struct block_device_operations sbull_ops = {
 	.owner           = THIS_MODULE,
@@ -393,22 +430,24 @@ static struct block_device_operations sbull_ops = {
 	.ioctl	         = sbull_ioctl
 };
 
+/* 简单模式的 blk-mq 操作 */
 static struct blk_mq_ops mq_ops_simple = {
     .queue_rq = sbull_request,
 };
 
+/* 完整模式的 blk-mq 操作 */
 static struct blk_mq_ops mq_ops_full = {
     .queue_rq = sbull_full_request,
 };
 
 
 /*
- * Set up our internal device.
+ * 设置我们的内部设备。
  */
 static void setup_device(struct sbull_dev *dev, int which)
 {
 	/*
-	 * Get some memory.
+	 * 获取一些内存。
 	 */
 	memset (dev, 0, sizeof (struct sbull_dev));
 	dev->size = nsectors*hardsect_size;
@@ -420,7 +459,7 @@ static void setup_device(struct sbull_dev *dev, int which)
 	spin_lock_init(&dev->lock);
 	
 	/*
-	 * The timer which "invalidates" the device.
+	 * “失效”设备的定时器。
 	 */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)) && !defined(timer_setup)
 	init_timer(&dev->timer);
@@ -433,8 +472,7 @@ static void setup_device(struct sbull_dev *dev, int which)
 
 	
 	/*
-	 * The I/O queue, depending on whether we are using our own
-	 * make_request function or not.
+	 * I/O 队列，取决于我们是否使用自己的 make_request 函数。
 	 */
 	switch (request_mode) {
 	    case RM_NOQUEUE:
@@ -456,7 +494,7 @@ static void setup_device(struct sbull_dev *dev, int which)
 
 	    default:
 		printk(KERN_NOTICE "Bad request mode %d, using simple\n", request_mode);
-        	/* fall into.. */
+        	/* fall into.. (继续执行) */
 	
 	    case RM_SIMPLE:
 		//dev->queue = blk_init_queue(sbull_request, &dev->lock);
@@ -468,7 +506,7 @@ static void setup_device(struct sbull_dev *dev, int which)
 	blk_queue_logical_block_size(dev->queue, hardsect_size);
 	dev->queue->queuedata = dev;
 	/*
-	 * And the gendisk structure.
+	 * 以及 gendisk 结构体。
 	 */
 	dev->gd = alloc_disk(SBULL_MINORS);
 	if (! dev->gd) {
@@ -496,7 +534,7 @@ static int __init sbull_init(void)
 {
 	int i;
 	/*
-	 * Get registered.
+	 * 注册块设备。
 	 */
 	sbull_major = register_blkdev(sbull_major, "sbull");
 	if (sbull_major <= 0) {
@@ -504,7 +542,7 @@ static int __init sbull_init(void)
 		return -EBUSY;
 	}
 	/*
-	 * Allocate the device array, and initialize each one.
+	 * 分配设备数组，并初始化每个设备。
 	 */
 	Devices = kmalloc(ndevices*sizeof (struct sbull_dev), GFP_KERNEL);
 	if (Devices == NULL)
