@@ -16,6 +16,7 @@
 
 #include <linux/ioctl.h>
 
+i
 /* 多队列仅在 2.4 内核上工作 */
 #ifdef SBULL_MULTIQUEUE
 #    warning "Multiqueue only works on 2.4 kernels"
@@ -57,8 +58,8 @@
  */
 
 typedef struct Sbull_Dev {
-   int size;                    /* 设备大小 */
-   int usage;                   /* 使用计数 */
+   int size;                    /*INT  设备大小 */
+   int usage;                   /*INT  使用计数 */
    struct timer_list timer;     /* 定时器，用于模拟介质移除 */
    spinlock_t lock;             /* 自旋锁，用于互斥访问 */
    u8 *data;                    /* 数据缓冲区指针 */
