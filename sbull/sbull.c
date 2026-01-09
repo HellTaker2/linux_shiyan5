@@ -45,7 +45,7 @@ module_param(hardsect_size, int, 0);
 static int nsectors = 1024;	/* 设备大小（扇区数） */
 module_param(nsectors, int, 0);
 
-static int ndevices = 4; /* 设备数量 */
+static int ndevices = 4; /* 设备数 */
 module_param(ndevices, int, 0);
 
 /*
