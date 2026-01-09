@@ -19,20 +19,28 @@ ifneq ($(KERNELRELEASE),)
 obj-m	:= sbull.o
 
 else
+# 当 KERNELRELEASE 未定义时，表示是用户直接调用make
+# 这个分支用于设置环境并调用内核构建系统
 
+# KERNELDIR: 内核构建目录，默认为当前运行内核的构建目录
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+# PWD: 模块源代码所在的目录
 PWD       := $(shell pwd)
 
+# 调用内核构建系统编译模块
 default:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	# -C $(KERNELDIR): 切换到内核目录 M=$(PWD): 指定模块源代码目录 modules: 编译模块的目标
 
 endif
 
 
-
+# clean 目标 - 清理编译生成的文件
 clean:
 	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions *.mod modules.order *.symvers
 
+# 依赖关系生成目标
+# 三个目标指向同一个命令，提供不同的调用方式
 depend .depend dep:
 	$(CC) $(EXTRA_CFLAGS) -M *.c > .depend
 
