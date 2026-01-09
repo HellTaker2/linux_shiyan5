@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 创建分区节点的函数
+# 该函数为创建分区节点的函数
 function make_minors {
     let part=1
     while (($part < $minors)); do
@@ -12,7 +12,7 @@ function make_minors {
 
 
 # FIXME: This isn't handling minors (partitions) at all.
-# (实际上，下面的代码确实处理了分区)
+# (实际上，下面的代码确实进行了分区处理)
 module="sbull"
 device="sbull"
 mode="664"
